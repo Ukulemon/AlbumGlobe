@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 沉浸式球形相册</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Microsoft YaHei', sans-serif;
+            color: white;
+        }
+
+        /* UI Overlay Styles */
+        #ui-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none; /* Let clicks pass through to canvas */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            transition: opacity 0.5s;
+        }
+
+        /* Start Screen */
+        #start-screen {
+            text-align: center;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 40px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            pointer-events: auto;
+            box-shadow: 0 0 50px rgba(0, 150, 255, 0.3);
+            max-width: 500px;
+            width: 90%;
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+            font-weight: 300;
+            letter-spacing: 2px;
+            background: linear-gradient(45deg, #00c6ff, #0072ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p {
+            color: #aaa;
+            margin-bottom: 30px;
+            font-size: 0.9rem;
+        }
+
+        .btn {
+            background: linear-gradient(90deg, #00c6ff 0%, #0072ff 100%);
+            border: none;
+            padding: 12px 30px;
+            color: white;
+            font-size: 16px;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(0, 114, 255, 0.4);
+            outline: none;
+            font-weight: bold;
+        }
+
+        .btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 20px rgba(0, 114, 255, 0.6);
+        }
+
+        .btn:active {
+            transform: scale(0.95);
+        }
+
+        /* File Input (Hidden) */
+        #file-input {
+            display: none;
+        }
+
+        /* Loading Bar */
+        #loading-container {
+            display: none;
+            width: 100%;
+            margin-top: 20px;
+        }
+        
+        #loading-bar-bg {
+            width: 100%;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        #loading-bar {
+            width: 0%;
+            height: 100%;
+            background: #00c6ff;
+            transition: width 0.3s;
+        }
+
+        #loading-text {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #888;
+        }
+
+        /* Controls Hint */
+        #controls-hint {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 12px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 1s;
+            text-align: center;
+        }
+
+        /* Modal for Zoomed Image */
+        #modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 100;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+
+        #modal.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        #modal-img {
+            max-width: 90%;
+            max-height: 90%;
+            box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+            border: 2px solid #333;
+            border-radius: 4px;
+            transform: scale(0.9);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        #modal.active #modal-img {
+            transform: scale(1);
+        }
+
+        #close-btn {
+            position: absolute;
+            top: 30px;
+            right: 30px;
+            color: white;
+            font-size: 30px;
+            cursor: pointer;
+            background: rgba(255,255,255,0.1);
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: background 0.2s;
+        }
+
+        #close-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        /* Canvas styling */
+        canvas {
+            display: block;
+        }
+    </style>
+    <!-- Import Three.js and OrbitControls -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <!-- 3D Canvas Container -->
+    <div id="canvas-container"></div>
+
+    <!-- UI Interface -->
+    <div id="ui-container">
+        <div id="start-screen">
+            <h1>3D 球形相册</h1>
+            <p>选择一个包含图片的文件夹，生成沉浸式相册</p>
+            
+            <button class="btn" id="select-btn">选择图片文件夹</button>
+            <!-- 'webkitdirectory' enables folder selection in Chrome/Edge -->
+            <input type="file" id="file-input" multiple accept="image/*" webkitdirectory directory>
+
+            <div id="loading-container">
+                <div id="loading-bar-bg"><div id="loading-bar"></div></div>
+                <div id="loading-text">正在处理图片 (0/0)...</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="controls-hint">
+        左键拖动旋转 • 滚轮缩放 • 点击查看详情
+    </div>
+
+    <!-- Zoom Modal -->
+    <div id="modal">
+        <div id="close-btn">&times;</div>
+        <img id="modal-img" src="" alt="Zoomed Photo">
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        // Removed TWEEN import as it was causing SyntaxError and wasn't actively used for critical animations
+
+        // Configuration
+        const SPHERE_RADIUS = 500; // 缩小半径 (原600)，让球体更紧凑
+        const IMAGE_SIZE = 120; // 增大图片尺寸 (原80)，减少图片间隙
+        const TOTAL_PARTICLES = 1500; // Background stars
+
+        // Globals
+        let scene, camera, renderer, controls, raycaster;
+        let images = []; // Stores mesh objects
+        let mouse = new THREE.Vector2();
+        let isDragging = false;
+        let dragStartTime = 0;
+        
+        // UI Elements
+        const selectBtn = document.getElementById('select-btn');
+        const fileInput = document.getElementById('file-input');
+        const startScreen = document.getElementById('start-screen');
+        const uiContainer = document.getElementById('ui-container');
+        const loadingContainer = document.getElementById('loading-container');
+        const loadingBar = document.getElementById('loading-bar');
+        const loadingText = document.getElementById('loading-text');
+        const controlsHint = document.getElementById('controls-hint');
+        const modal = document.getElementById('modal');
+        const modalImg = document.getElementById('modal-img');
+        const closeBtn = document.getElementById('close-btn');
+
+        // Initialization
+        function init() {
+            // Scene Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+            scene.fog = new THREE.FogExp2(0x050505, 0.0006);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 5000);
+            camera.position.set(0, 0, 1100); // 调整相机初始位置，离球体更近一些 (原1400)
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.5;
+            controls.enablePan = false;
+            controls.minDistance = 100;
+            controls.maxDistance = 2000;
+
+            // Raycaster for interaction
+            raycaster = new THREE.Raycaster();
+
+            // Lighting (Simple ambient + point for depth)
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.5); // Bright flat light for photos
+            scene.add(ambientLight);
+
+            // Create Background Stars
+            createStars();
+
+            // Event Listeners
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerdown', () => { isDragging = false; dragStartTime = Date.now(); });
+            // If mouse moves significantly or time passes, it's a drag, not a click
+            window.addEventListener('pointerup', onPointerUp);
+            
+            // UI Listeners
+            selectBtn.addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', handleFiles);
+            closeBtn.addEventListener('click', closeModal);
+            modal.addEventListener('click', (e) => {
+                if(e.target === modal) closeModal();
+            });
+
+            // Animation Loop
+            animate();
+        }
+
+        function createStars() {
+            const geometry = new THREE.BufferGeometry();
+            const vertices = [];
+
+            for (let i = 0; i < TOTAL_PARTICLES; i++) {
+                const x = (Math.random() - 0.5) * 4000;
+                const y = (Math.random() - 0.5) * 4000;
+                const z = (Math.random() - 0.5) * 4000;
+                vertices.push(x, y, z);
+            }
+
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            const material = new THREE.PointsMaterial({ color: 0x888888, size: 2 });
+            const stars = new THREE.Points(geometry, material);
+            scene.add(stars);
+        }
+
+        async function handleFiles(event) {
+            const files = Array.from(event.target.files).filter(file => file.type.startsWith('image/'));
+            
+            if (files.length === 0) {
+                alert("未找到图片文件，请选择包含图片的文件夹。");
+                return;
+            }
+
+            // Switch UI
+            selectBtn.style.display = 'none';
+            loadingContainer.style.display = 'block';
+
+            const textureLoader = new THREE.TextureLoader();
+            const imageObjects = [];
+
+            // Process files
+            let processed = 0;
+            for (const file of files) {
+                try {
+                    const dataUrl = await readFileAsDataURL(file);
+                    const texture = await loadTexture(textureLoader, dataUrl);
+                    
+                    // Store aspect ratio for correct plane sizing
+                    const aspect = texture.image.width / texture.image.height;
+                    imageObjects.push({ texture, aspect, file });
+                } catch (err) {
+                    console.error("Skipping file", file.name, err);
+                }
+                
+                processed++;
+                const percent = Math.round((processed / files.length) * 100);
+                loadingBar.style.width = `${percent}%`;
+                loadingText.textContent = `正在加载: ${processed} / ${files.length}`;
+            }
+
+            if (imageObjects.length > 0) {
+                buildSphere(imageObjects);
+                
+                // Hide start screen
+                startScreen.style.opacity = 0;
+                setTimeout(() => {
+                    uiContainer.style.display = 'none';
+                    controlsHint.style.opacity = 1;
+                }, 500);
+            }
+        }
+
+        function readFileAsDataURL(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function loadTexture(loader, url) {
+            return new Promise((resolve, reject) => {
+                loader.load(url, resolve, undefined, reject);
+            });
+        }
+
+        // Fibonacci Sphere Algorithm to distribute images evenly
+        function buildSphere(imageObjects) {
+            const count = imageObjects.length;
+            const phi = Math.PI * (3 - Math.sqrt(5)); // Golden angle
+
+            for (let i = 0; i < count; i++) {
+                const item = imageObjects[i];
+                
+                // Fibonacci math
+                const y = 1 - (i / (count - 1)) * 2; // y goes from 1 to -1
+                const radiusAtY = Math.sqrt(1 - y * y); // Radius at y
+                const theta = phi * i; // Golden angle increment
+
+                const x = Math.cos(theta) * radiusAtY;
+                const z = Math.sin(theta) * radiusAtY;
+
+                // Calculate dimensions keeping aspect ratio, fitting within IMAGE_SIZE
+                let w, h;
+                if (item.aspect > 1) {
+                    w = IMAGE_SIZE;
+                    h = IMAGE_SIZE / item.aspect;
+                } else {
+                    h = IMAGE_SIZE;
+                    w = IMAGE_SIZE * item.aspect;
+                }
+
+                const geometry = new THREE.PlaneGeometry(w, h);
+                // DoubleSide to see it from behind if needed
+                const material = new THREE.MeshBasicMaterial({ 
+                    map: item.texture, 
+                    side: THREE.DoubleSide,
+                    transparent: true 
+                });
+
+                const mesh = new THREE.Mesh(geometry, material);
+
+                // Position on sphere surface
+                mesh.position.set(x * SPHERE_RADIUS, y * SPHERE_RADIUS, z * SPHERE_RADIUS);
+
+                // Make mesh look at the center of the sphere
+                mesh.lookAt(0, 0, 0);
+                // Then rotate 180 deg because PlaneGeometry faces +Z, but we want it facing OUT
+                mesh.rotateY(Math.PI); // Or simply lookAt vector*2
+
+                // Store original data for click handling
+                mesh.userData = { 
+                    isImage: true, 
+                    src: item.texture.image.src,
+                    originalPos: mesh.position.clone()
+                };
+
+                scene.add(mesh);
+                images.push(mesh);
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onPointerMove(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            
+            // Check for hover effect
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(images);
+
+            if (intersects.length > 0) {
+                document.body.style.cursor = 'pointer';
+                controls.autoRotate = false; // Pause rotation on hover
+            } else {
+                document.body.style.cursor = 'default';
+                if(!modal.classList.contains('active')) controls.autoRotate = true;
+            }
+        }
+
+        function onPointerUp(event) {
+            // Differentiate between a drag and a click
+            const dragDuration = Date.now() - dragStartTime;
+            if (dragDuration > 200) return; // It was a drag operation
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(images);
+
+            if (intersects.length > 0) {
+                const object = intersects[0].object;
+                openModal(object.userData.src);
+            }
+        }
+
+        function openModal(src) {
+            modalImg.src = src;
+            modal.classList.add('active');
+            controls.autoRotate = false;
+        }
+
+        function closeModal() {
+            modal.classList.remove('active');
+            controls.autoRotate = true;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            // Removed TWEEN.update() as it was causing errors and is unused
+            renderer.render(scene, camera);
+        }
+
+        // Boot
+        init();
+
+    </script>
+</body>
+</html>
