@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 沉浸式文件夹漫游</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Microsoft YaHei', sans-serif;
+            color: white;
+            user-select: none;
+        }
+
+        /* --- UI 覆盖层 --- */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        /* 顶部导航栏 */
+        #navbar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            padding: 15px 20px;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            pointer-events: auto;
+            box-sizing: border-box;
+            transform: translateY(-100%);
+            transition: transform 0.3s ease;
+        }
+
+        #navbar.visible {
+            transform: translateY(0);
+        }
+
+        #back-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.2s;
+        }
+
+        #back-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateX(-2px);
+        }
+
+        #back-btn:disabled {
+            opacity: 0.3;
+            cursor: default;
+            transform: none;
+        }
+
+        #path-display {
+            font-size: 14px;
+            color: #aaa;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            flex-grow: 1;
+        }
+
+        #path-display span {
+            color: #00c6ff;
+            margin: 0 5px;
+        }
+
+        /* 启动屏幕 */
+        #start-screen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(0, 0, 0, 0.85);
+            padding: 40px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            pointer-events: auto;
+            box-shadow: 0 0 50px rgba(0, 150, 255, 0.3);
+            max-width: 500px;
+            width: 90%;
+            z-index: 20;
+            transition: opacity 0.5s;
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+            font-weight: 300;
+            letter-spacing: 2px;
+            background: linear-gradient(45deg, #00c6ff, #0072ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .btn-primary {
+            background: linear-gradient(90deg, #00c6ff 0%, #0072ff 100%);
+            border: none;
+            padding: 12px 30px;
+            color: white;
+            font-size: 16px;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 15px rgba(0, 114, 255, 0.4);
+            outline: none;
+            margin-top: 20px;
+        }
+
+        .btn-primary:hover {
+            transform: scale(1.05);
+        }
+
+        #file-input { display: none; }
+
+        /* 加载提示 */
+        #loading-indicator {
+            display: none;
+            margin-top: 20px;
+            font-size: 14px;
+            color: #888;
+        }
+
+        /* 图片预览弹窗 */
+        #modal {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95);
+            z-index: 100;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s;
+        }
+
+        #modal.active { opacity: 1; pointer-events: auto; }
+
+        #modal img {
+            max-width: 90%; max-height: 90%;
+            border: 2px solid #333;
+            box-shadow: 0 0 40px rgba(0,0,0,0.8);
+        }
+
+        #modal-close {
+            position: absolute; top: 30px; right: 30px;
+            font-size: 40px; cursor: pointer; color: white;
+            opacity: 0.7; transition: opacity 0.2s;
+        }
+        #modal-close:hover { opacity: 1; }
+
+        /* 底部提示 */
+        #controls-hint {
+            position: absolute; bottom: 20px; left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.4);
+            font-size: 12px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 1s;
+        }
+
+        /* 文件夹名称标签样式 (将被作为 Texture 使用，这里只是 CSS 备份) */
+        .label-canvas { display: none; }
+    </style>
+    
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="ui-layer">
+        <!-- 顶部导航 -->
+        <div id="navbar">
+            <button id="back-btn" disabled>⬅ 返回上一级</button>
+            <div id="path-display">等待选择文件夹...</div>
+        </div>
+
+        <!-- 启动页 -->
+        <div id="start-screen">
+            <h1>3D 文件夹漫游</h1>
+            <p>选择根目录，以 3D 视图探索子文件夹和照片</p>
+            <button class="btn-primary" id="select-btn">打开图片根目录</button>
+            <input type="file" id="file-input" multiple webkitdirectory directory>
+            <div id="loading-indicator">正在构建目录树...</div>
+        </div>
+
+        <div id="controls-hint">点击文件夹进入 • 点击照片查看 • 滚轮缩放</div>
+    </div>
+
+    <!-- 预览弹窗 -->
+    <div id="modal">
+        <div id="modal-close">&times;</div>
+        <img id="modal-img" src="">
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- 配置参数 ---
+        const CONFIG = {
+            SPHERE_RADIUS: 400,    // 布局半径
+            ITEM_SIZE: 100,        // 元素大小
+            FOLDER_COLOR: 0xffaa00,// 文件夹模型颜色 (金黄色)
+            BG_PARTICLES: 1000     // 背景星星数量
+        };
+
+        // --- 全局变量 ---
+        let scene, camera, renderer, controls, raycaster;
+        let mouse = new THREE.Vector2();
+        let activeObjects = []; // 当前场景中的可交互对象
+        let fileTree = {};      // 解析后的文件树
+        let currentPath = [];   // 当前路径栈 (存储节点引用)
+        let textureLoader;
+        
+        // UI 元素
+        const els = {
+            startScreen: document.getElementById('start-screen'),
+            navbar: document.getElementById('navbar'),
+            backBtn: document.getElementById('back-btn'),
+            pathDisplay: document.getElementById('path-display'),
+            fileInput: document.getElementById('file-input'),
+            loading: document.getElementById('loading-indicator'),
+            hint: document.getElementById('controls-hint'),
+            modal: document.getElementById('modal'),
+            modalImg: document.getElementById('modal-img')
+        };
+
+        // --- 初始化 ---
+        function init() {
+            // 1. Three.js 基础设置
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+            scene.fog = new THREE.FogExp2(0x050505, 0.0008);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 5000);
+            camera.position.set(0, 0, 1000);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 2. 控制器
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.5;
+            controls.minDistance = 50;
+            controls.maxDistance = 2000;
+
+            // 3. 灯光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+            dirLight.position.set(500, 500, 500);
+            scene.add(dirLight);
+
+            // 4. 辅助工具
+            raycaster = new THREE.Raycaster();
+            textureLoader = new THREE.TextureLoader();
+
+            // 5. 背景星空
+            createStars();
+
+            // 6. 事件监听
+            window.addEventListener('resize', onWindowResize);
+            renderer.domElement.addEventListener('pointermove', onPointerMove);
+            renderer.domElement.addEventListener('click', onClick);
+            
+            els.document = document.getElementById('select-btn').addEventListener('click', () => els.fileInput.click());
+            els.fileInput.addEventListener('change', handleFileSelect);
+            els.backBtn.addEventListener('click', navigateUp);
+            document.getElementById('modal-close').addEventListener('click', closeModal);
+            els.modal.addEventListener('click', (e) => { if(e.target === els.modal) closeModal() });
+
+            animate();
+        }
+
+        // --- 核心逻辑：文件树构建 ---
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            if (files.length === 0) return;
+
+            els.loading.style.display = 'block';
+
+            // 异步处理以防界面卡死
+            setTimeout(() => {
+                const rootName = files[0].webkitRelativePath.split('/')[0];
+                fileTree = { name: rootName, type: 'folder', children: {}, files: [] };
+                
+                // 构建树
+                files.forEach(file => {
+                    // 只处理图片
+                    if (!file.type.startsWith('image/')) return;
+
+                    const parts = file.webkitRelativePath.split('/');
+                    let currentNode = fileTree;
+
+                    // 遍历路径 parts (跳过最后一个文件名)
+                    for (let i = 1; i < parts.length - 1; i++) {
+                        const folderName = parts[i];
+                        if (!currentNode.children[folderName]) {
+                            currentNode.children[folderName] = {
+                                name: folderName,
+                                type: 'folder',
+                                children: {},
+                                files: [],
+                                parent: currentNode // 方便向上导航
+                            };
+                        }
+                        currentNode = currentNode.children[folderName];
+                    }
+
+                    // 添加文件
+                    currentNode.files.push({
+                        name: file.name,
+                        fileObj: file,
+                        type: 'image'
+                    });
+                });
+
+                // 完成构建
+                currentPath = [fileTree];
+                els.startScreen.style.opacity = 0;
+                setTimeout(() => {
+                    els.startScreen.style.display = 'none';
+                    els.navbar.classList.add('visible');
+                    els.hint.style.opacity = 1;
+                    renderCurrentFolder();
+                }, 500);
+            }, 100);
+        }
+
+        // --- 渲染逻辑 ---
+        function renderCurrentFolder() {
+            const folderNode = currentPath[currentPath.length - 1];
+
+            // 1. 清理旧对象
+            activeObjects.forEach(obj => {
+                scene.remove(obj);
+                if(obj.geometry) obj.geometry.dispose();
+                if(obj.material) {
+                    if(Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+                    else obj.material.dispose();
+                }
+            });
+            activeObjects = [];
+
+            // 2. 准备数据
+            const subfolders = Object.values(folderNode.children);
+            const images = folderNode.files;
+            const totalItems = subfolders.length + images.length;
+
+            // 更新UI
+            updateNavbar(folderNode);
+
+            if (totalItems === 0) {
+                // 空文件夹提示 (可选)
+                return; 
+            }
+
+            // 3. 斐波那契球体布局算法
+            const phi = Math.PI * (3 - Math.sqrt(5));
+            
+            // 动态调整半径：如果物品少，半径小一点
+            const radius = totalItems < 10 ? 200 : CONFIG.SPHERE_RADIUS;
+
+            // 合并列表进行遍历
+            const allItems = [...subfolders, ...images];
+
+            allItems.forEach((item, index) => {
+                const y = 1 - (index / (totalItems - 1 || 1)) * 2;
+                const radiusAtY = Math.sqrt(1 - y * y);
+                const theta = phi * index;
+
+                const x = Math.cos(theta) * radiusAtY * radius;
+                const z = Math.sin(theta) * radiusAtY * radius;
+                const posY = y * radius;
+
+                if (item.type === 'folder') {
+                    createFolderMesh(item, x, posY, z);
+                } else {
+                    createImageMesh(item, x, posY, z);
+                }
+            });
+        }
+
+        // 创建文件夹模型 (3D 立方体 + 文字标签)
+        function createFolderMesh(folderData, x, y, z) {
+            // 几何体：线框 icosahedron 或 cube
+            const geometry = new THREE.BoxGeometry(60, 60, 60);
+            const material = new THREE.MeshPhongMaterial({ 
+                color: CONFIG.FOLDER_COLOR, 
+                transparent: true, 
+                opacity: 0.8,
+                emissive: 0x442200
+            });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, z);
+
+            // 旋转一点让它更有动感
+            mesh.rotation.set(Math.random(), Math.random(), 0);
+            
+            // 添加边框线让其更有科技感
+            const edges = new THREE.EdgesGeometry(geometry);
+            const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffffff }));
+            mesh.add(line);
+
+            // 绑定数据
+            mesh.userData = { type: 'folder', ref: folderData };
+
+            // 添加文字标签 Sprite
+            const label = createTextSprite(folderData.name);
+            label.position.set(0, 50, 0); // 悬浮在盒子上方
+            mesh.add(label);
+
+            scene.add(mesh);
+            activeObjects.push(mesh);
+        }
+
+        // 创建图片模型
+        function createImageMesh(fileData, x, y, z) {
+            // 使用 URL.createObjectURL 快速加载本地图片
+            const imgUrl = URL.createObjectURL(fileData.fileObj);
+            
+            // 初始占位材质，加载完成后替换
+            const geometry = new THREE.PlaneGeometry(CONFIG.ITEM_SIZE, CONFIG.ITEM_SIZE);
+            const material = new THREE.MeshBasicMaterial({ 
+                color: 0x333333, 
+                side: THREE.DoubleSide 
+            });
+            
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, z);
+            mesh.lookAt(0, 0, 0);
+            mesh.rotateY(Math.PI); // 矫正朝向
+
+            // 异步加载真实纹理
+            textureLoader.load(imgUrl, (texture) => {
+                // 计算比例
+                const aspect = texture.image.width / texture.image.height;
+                let w = CONFIG.ITEM_SIZE, h = CONFIG.ITEM_SIZE;
+                if (aspect > 1) h = w / aspect;
+                else w = h * aspect;
+
+                mesh.geometry.dispose();
+                mesh.geometry = new THREE.PlaneGeometry(w, h);
+                mesh.material.map = texture;
+                mesh.material.color.setHex(0xffffff); // 重置颜色
+                mesh.material.needsUpdate = true;
+            });
+
+            mesh.userData = { type: 'image', src: imgUrl };
+            scene.add(mesh);
+            activeObjects.push(mesh);
+        }
+
+        // 创建文字标签 (使用 Canvas)
+        function createTextSprite(text) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const fontSize = 32;
+            ctx.font = `bold ${fontSize}px Microsoft YaHei`;
+            
+            // 测量文字
+            const metrics = ctx.measureText(text);
+            const textWidth = metrics.width;
+            
+            canvas.width = textWidth + 20;
+            canvas.height = fontSize + 20;
+            
+            // 绘制背景
+            ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+            ctx.roundRect ? ctx.roundRect(0, 0, canvas.width, canvas.height, 10) : ctx.fillRect(0,0,canvas.width, canvas.height);
+            ctx.fill();
+            
+            // 绘制文字
+            ctx.fillStyle = "#00c6ff";
+            ctx.font = `bold ${fontSize}px Microsoft YaHei`;
+            ctx.fillText(text, 10, fontSize);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+            const sprite = new THREE.Sprite(material);
+            
+            // 缩放 Sprite 以匹配场景比例
+            sprite.scale.set(canvas.width / 2, canvas.height / 2, 1);
+            return sprite;
+        }
+
+        // --- 交互逻辑 ---
+        function onClick(event) {
+            // 只有在没有模态框且不在拖拽时触发
+            if (els.modal.classList.contains('active')) return;
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(activeObjects);
+
+            if (intersects.length > 0) {
+                // 找到最近的父对象（因为可能点击到线框或标签）
+                let target = intersects[0].object;
+                while (!target.userData.type && target.parent) {
+                    target = target.parent;
+                }
+
+                if (target.userData.type === 'folder') {
+                    // 进入文件夹动画效果
+                    zoomInEffect(() => {
+                        currentPath.push(target.userData.ref);
+                        renderCurrentFolder();
+                    });
+                } else if (target.userData.type === 'image') {
+                    // 打开图片
+                    openModal(target.userData.src);
+                }
+            }
+        }
+
+        function navigateUp() {
+            if (currentPath.length > 1) {
+                currentPath.pop();
+                renderCurrentFolder();
+            }
+        }
+
+        function updateNavbar(node) {
+            // 更新面包屑路径
+            const names = currentPath.map(n => n.name);
+            els.pathDisplay.innerHTML = names.join(' <span>/</span> ');
+            els.backBtn.disabled = currentPath.length <= 1;
+        }
+
+        // 简单的进入效果
+        function zoomInEffect(callback) {
+            const start = { fov: camera.fov };
+            const end = { fov: 30 }; // 缩小 FOV 制造冲刺感
+            
+            // 这里简单的用 setTimeout 模拟，为了代码简洁不引入 Tween
+            let step = 0;
+            const interval = setInterval(() => {
+                step++;
+                camera.fov -= 2;
+                camera.updateProjectionMatrix();
+                if (step > 10) {
+                    clearInterval(interval);
+                    callback();
+                    // 恢复
+                    camera.fov = 60;
+                    camera.updateProjectionMatrix();
+                }
+            }, 16);
+        }
+
+        // 鼠标悬停效果
+        function onPointerMove(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(activeObjects);
+
+            if (intersects.length > 0) {
+                document.body.style.cursor = 'pointer';
+                controls.autoRotate = false;
+            } else {
+                document.body.style.cursor = 'default';
+                if (!els.modal.classList.contains('active')) controls.autoRotate = true;
+            }
+        }
+
+        function openModal(src) {
+            els.modalImg.src = src;
+            els.modal.classList.add('active');
+            controls.autoRotate = false;
+        }
+
+        function closeModal() {
+            els.modal.classList.remove('active');
+            controls.autoRotate = true;
+        }
+
+        function createStars() {
+            const geo = new THREE.BufferGeometry();
+            const verts = [];
+            for(let i=0; i<CONFIG.BG_PARTICLES; i++) {
+                verts.push(
+                    (Math.random()-0.5)*3000,
+                    (Math.random()-0.5)*3000,
+                    (Math.random()-0.5)*3000
+                );
+            }
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+            const mat = new THREE.PointsMaterial({color: 0x666666, size: 2});
+            scene.add(new THREE.Points(geo, mat));
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            
+            // 让文件夹模型自转
+            activeObjects.forEach(obj => {
+                if (obj.userData.type === 'folder') {
+                    obj.rotation.x += 0.01;
+                    obj.rotation.y += 0.01;
+                    // 保持标签永远朝向相机 (Billboard)
+                    const label = obj.children.find(c => c.isSprite);
+                    if(label) {
+                        // 简单的 billboard 效果在 OrbitControl 下通常自动处理 sprite 朝向，
+                        // 但如果父级旋转了，sprite 需要反向旋转或者直接设为世界坐标朝向。
+                        // 这里简化处理：Sprite 默认总是面向相机。
+                    }
+                }
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>
