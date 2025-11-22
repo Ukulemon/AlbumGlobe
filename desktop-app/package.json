@@ -1,0 +1,42 @@
+{
+  "name": "albumglobe-desktop",
+  "version": "0.1.0",
+  "description": "Desktop shell for AlbumGlobe with Three.js and native folder browsing",
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.albumglobe.desktop",
+    "productName": "AlbumGlobe",
+    "files": [
+      "dist/**/*",
+      "app/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "app/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "electron": "28.3.3",
+    "three": "0.160.0"
+  },
+  "devDependencies": {
+    "electron-builder": "24.13.3"
+  }
+}
